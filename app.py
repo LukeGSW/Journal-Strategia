@@ -825,7 +825,4 @@ def render_ticker_pies(user_ops: pd.DataFrame, user_tickers_df: pd.DataFrame):
                          height=min(600, len(monthly)*row_height_px+60))
             st.line_chart(data=monthly.set_index("month")[["Investito Totale"]], use_container_width=True)
 
-elif authentication_status is False:
-    st.error("Username/password non corretti")
-else:
-    st.warning("Per favore, inserisci username e password")
+
