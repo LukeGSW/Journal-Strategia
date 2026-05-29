@@ -1,0 +1,7 @@
+pandas==2.2.0
+streamlit>=1.32.0
+streamlit-authenticator>=0.3.2
+gspread
+gspread-dataframe
+plotly>=5.18.0
+bcrypt>=4.0.0
