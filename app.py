@@ -482,7 +482,7 @@ def render_ticker_pies(user_ops: pd.DataFrame, user_tickers_df: pd.DataFrame):
     )
 
 # ------------------------ App ------------------------
-if authentication_status:
+if st.session_state.get("logged_in"):
     st.sidebar.title(f"Benvenuto, *{name}*")
     authenticator.logout("Logout", "sidebar")
     st.sidebar.markdown("---")
@@ -830,7 +830,5 @@ if authentication_status:
 
 elif authentication_status is False:
     st.error("Username/password non corretti")
-    render_signup_panel()
 else:
     st.warning("Per favore, inserisci username e password")
-    render_signup_panel()
