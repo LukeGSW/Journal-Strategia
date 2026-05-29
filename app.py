@@ -482,19 +482,7 @@ def render_ticker_pies(user_ops: pd.DataFrame, user_tickers_df: pd.DataFrame):
     )
 
 # ------------------------ App ------------------------
-# INCOLLA QUESTO:
-if st.session_state.get("logged_in"):
-    # Recuperiamo l'username dalla sessione corrente
-    utente_corrente = st.session_state.get("username", "")
-    st.sidebar.title(f"Benvenuto, *{utente_corrente}*")
-    
-    # Creiamo il bottone di logout nativo
-    if st.sidebar.button("Logout"):
-        st.session_state["logged_in"] = False
-        st.session_state["username"] = None
-        st.rerun()
-        
-    st.sidebar.markdown("---")
+
 
     st.title("📈 Diario di Bordo Quantitativo")
 
