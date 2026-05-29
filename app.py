@@ -7,7 +7,6 @@
 from __future__ import annotations
 import re
 import streamlit as st
-import streamlit_authenticator as stauth
 import pandas as pd
 import bcrypt
 import plotly.graph_objects as go
@@ -193,116 +192,50 @@ def build_credentials() -> dict:
 
     return credentials
 
-# ------------------------ Autenticazione ------------------------
-try:
-    credentials = build_credentials()
-    cookie_conf = st.secrets["cookies"]
-    authenticator = stauth.Authenticate(
-        credentials,
-        cookie_conf["cookie_name"],
-        cookie_conf["key"],
-        cookie_conf["expiry_days"],
-    )
-except KeyError as e:
-    st.error(f"🚨 Errore di configurazione nei Secrets: manca la chiave {e}.")
+# ------------------------ Autenticazione Semplificata ------------------------
+if "logged_in" not in st.session_state:
+    st.session_state["logged_in"] = False
+
+if not st.session_state["logged_in"]:
+    st.title("📈 Diario di Bordo Quantitativo")
+    st.subheader("Accesso Riservato")
+    
+    with st.form("login_form"):
+        input_username = st.text_input("Username").strip()
+        input_password = st.text_input("Password", type="password").strip()
+        submit_button = st.form_submit_button("Accedi")
+        
+        if submit_button:
+            # Controlla se la sezione [utenti] esiste nei Secrets e se l'username è presente
+            if "utenti" in st.secrets and input_username in st.secrets["utenti"]:
+                # Verifica la password in chiaro
+                if input_password == st.secrets["utenti"][input_username]:
+                    st.session_state["logged_in"] = True
+                    st.session_state["username"] = input_username
+                    st.rerun()
+                else:
+                    st.error("Password errata.")
+            else:
+                st.error("Utente non autorizzato.")
+    st.stop()  # Ferma il rendering del resto della pagina se non loggato
+
+# Variabile per filtrare i dati nel resto del codice
+username = st.session_state["username"]
+
+# Gestione Sidebar post-login
+st.sidebar.title(f"Benvenuto, *{username}*")
+if st.sidebar.button("Logout"):
+    st.session_state["logged_in"] = False
+    st.session_state["username"] = None
+    st.rerun()
+st.sidebar.markdown("---")
+
+st.title("📈 Diario di Bordo Quantitativo")
+
+# ------------------------ Connessioni Database ------------------------
+if worksheet is None or ws_tickers is None:
+    st.error("🚨 Connessione ai worksheet non riuscita. Verifica le credenziali GCP in secrets.")
     st.stop()
-except Exception as e:
-    st.error(f"🚨 Errore inizializzazione autenticazione: {e}")
-    st.stop()
-
-authenticator.login()
-name = st.session_state.get("name")
-authentication_status = st.session_state.get("authentication_status")
-username = st.session_state.get("username")
-
-# ------------------------ Registrazione nuovo account (UI) ------------------------
-EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
-
-def _hash_password(plain: str) -> str:
-    return bcrypt.hashpw(plain.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
-
-def render_signup_panel():
-    """Mostra il pannello di creazione account sotto al form di login."""
-    st.markdown("---")
-    if "show_signup" not in st.session_state:
-        st.session_state.show_signup = False
-
-    col_a, col_b = st.columns([1, 3])
-    with col_a:
-        if st.button(
-            "🆕 Crea nuovo account" if not st.session_state.show_signup else "✖️ Chiudi registrazione",
-            use_container_width=True,
-        ):
-            st.session_state.show_signup = not st.session_state.show_signup
-            st.rerun()
-    with col_b:
-        st.caption("Non hai un account? Registrane uno nuovo: i dati vengono salvati nel foglio Google **Users**.")
-
-    if not st.session_state.show_signup:
-        return
-
-    with st.form("signup_form", clear_on_submit=False):
-        st.subheader("Registrazione nuovo utente")
-        c1, c2 = st.columns(2)
-        with c1:
-            su_name = st.text_input("Nome e Cognome", key="su_name").strip()
-            su_username = st.text_input("Username (solo lettere/numeri/._-)", key="su_username").strip().lower()
-        with c2:
-            su_email = st.text_input("Email", key="su_email").strip().lower()
-        c3, c4 = st.columns(2)
-        with c3:
-            su_pw1 = st.text_input("Password (min 8 caratteri)", type="password", key="su_pw1")
-        with c4:
-            su_pw2 = st.text_input("Conferma Password", type="password", key="su_pw2")
-
-        submitted = st.form_submit_button("Crea account")
-        if not submitted:
-            return
-
-        # Validazioni
-        if not su_name or not su_username or not su_email or not su_pw1:
-            st.error("Compila tutti i campi.")
-            return
-        if not re.match(r"^[A-Za-z0-9._\-]{3,32}$", su_username):
-            st.error("Username non valido. Usa 3-32 caratteri tra lettere, numeri, '.', '_' o '-'.")
-            return
-        if not EMAIL_RE.match(su_email):
-            st.error("Email non valida.")
-            return
-        if len(su_pw1) < 8:
-            st.error("La password deve essere di almeno 8 caratteri.")
-            return
-        if su_pw1 != su_pw2:
-            st.error("Le due password non coincidono.")
-            return
-
-        # Verifica univocità
-        existing = credentials.get("usernames", {})
-        if su_username in {k.lower() for k in existing.keys()}:
-            st.error("Username già in uso. Scegline un altro.")
-            return
-        # email già usata?
-        if any(str(u.get("email","")).lower() == su_email for u in existing.values()):
-            st.error("Email già registrata.")
-            return
-
-        if ws_users is None:
-            st.error("Foglio 'Users' non disponibile: impossibile salvare l'account.")
-            return
-
-        try:
-            pw_hash = _hash_password(su_pw1)
-            ok = dm.append_user(ws_users, su_username, su_name, su_email, pw_hash)
-            if not ok:
-                st.error("Username già esistente sul foglio Users.")
-                return
-            st.success("✅ Account creato! Ora puoi effettuare il login con le tue credenziali.")
-            st.session_state.show_signup = False
-            # pulisci cache utenti per forzare il refresh delle credenziali al prossimo login
-            st.cache_data.clear()
-            st.rerun()
-        except Exception as e:
-            st.error(f"Errore durante la creazione dell'account: {e}")
 
 # ------------------------ Metriche ------------------------
 def compute_aggregates(user_ops: pd.DataFrame) -> pd.DataFrame:
