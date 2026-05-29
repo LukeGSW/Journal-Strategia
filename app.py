@@ -136,10 +136,6 @@ def format_pct_or_dash(value) -> str:
         return "-"
 
 # ------------------------ Cassa Residua per BTD ------------------------
-# Regole strategia Kriterion Quant:
-#   - Strategia MENSILE  : cassa BTD iniziale = 1× capitale iniziale
-#   - Strategia SETTIMANALE: cassa BTD iniziale = 2× capitale iniziale
-#                            (il capitale iniziale rappresenta 1/3 del totale impiegato)
 FREQUENZE = ["mensile", "settimanale"]
 
 def get_cassa_multiplier(frequenza: str) -> float:
@@ -171,7 +167,6 @@ def build_credentials() -> dict:
                 "name": u["name"], "email": u["email"], "password": u["password"]
             }
     except Exception:
-        # ok se non ci sono utenti nei secrets, gli account verranno tutti dal foglio
         pass
 
     # 2) Utenti dal foglio "Users"
@@ -192,7 +187,94 @@ def build_credentials() -> dict:
 
     return credentials
 
-# ------------------------ Autenticazione Semplificata ------------------------
+# ------------------------ Registrazione nuovo account (UI) ------------------------
+EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+def _hash_password(plain: str) -> str:
+    return bcrypt.hashpw(plain.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+
+def render_signup_panel(credentials: dict):
+    """Mostra il pannello di creazione account sotto al form di login."""
+    st.markdown("---")
+    if "show_signup" not in st.session_state:
+        st.session_state.show_signup = False
+
+    col_a, col_b = st.columns([1, 3])
+    with col_a:
+        if st.button(
+            "🆕 Crea nuovo account" if not st.session_state.show_signup else "✖️ Chiudi registrazione",
+            use_container_width=True,
+        ):
+            st.session_state.show_signup = not st.session_state.show_signup
+            st.rerun()
+    with col_b:
+        st.caption("Non hai un account? Registrane uno nuovo: i dati vengono salvati nel foglio Google **Users**.")
+
+    if not st.session_state.show_signup:
+        return
+
+    with st.form("signup_form", clear_on_submit=False):
+        st.subheader("Registrazione nuovo utente")
+        c1, c2 = st.columns(2)
+        with c1:
+            su_name = st.text_input("Nome e Cognome", key="su_name").strip()
+            su_username = st.text_input("Username (solo lettere/numeri/._-)", key="su_username").strip().lower()
+        with c2:
+            su_email = st.text_input("Email", key="su_email").strip().lower()
+        c3, c4 = st.columns(2)
+        with c3:
+            su_pw1 = st.text_input("Password (min 8 caratteri)", type="password", key="su_pw1")
+        with c4:
+            su_pw2 = st.text_input("Conferma Password", type="password", key="su_pw2")
+
+        submitted = st.form_submit_button("Crea account")
+        if not submitted:
+            return
+
+        # Validazioni
+        if not su_name or not su_username or not su_email or not su_pw1:
+            st.error("Compila tutti i campi.")
+            return
+        if not re.match(r"^[A-Za-z0-9._\-]{3,32}$", su_username):
+            st.error("Username non valido. Usa 3-32 caratteri tra lettere, numeri, '.', '_' o '-'.")
+            return
+        if not EMAIL_RE.match(su_email):
+            st.error("Email non valida.")
+            return
+        if len(su_pw1) < 8:
+            st.error("La password deve essere di almeno 8 caratteri.")
+            return
+        if su_pw1 != su_pw2:
+            st.error("Le due password non coincidono.")
+            return
+
+        # Verifica univocità
+        existing = credentials.get("usernames", {})
+        if su_username in {k.lower() for k in existing.keys()}:
+            st.error("Username già in uso. Scegline un altro.")
+            return
+        if any(str(u.get("email","")).lower() == su_email for u in existing.values()):
+            st.error("Email già registrata.")
+            return
+
+        if ws_users is None:
+            st.error("Foglio 'Users' non disponibile: impossibile salvare l'account.")
+            return
+
+        try:
+            pw_hash = _hash_password(su_pw1)
+            ok = dm.append_user(ws_users, su_username, su_name, su_email, pw_hash)
+            if not ok:
+                st.error("Username già esistente sul foglio Users.")
+                return
+            st.success("✅ Account creato! Ora puoi effettuare il login con le tue credenziali.")
+            st.session_state.show_signup = False
+            st.cache_data.clear()
+            st.rerun()
+        except Exception as e:
+            st.error(f"Errore durante la creazione dell'account: {e}")
+
+# ------------------------ Autenticazione Nativa ------------------------
 if "logged_in" not in st.session_state:
     st.session_state["logged_in"] = False
 
@@ -200,42 +282,44 @@ if not st.session_state["logged_in"]:
     st.title("📈 Diario di Bordo Quantitativo")
     st.subheader("Accesso Riservato")
     
+    credentials = build_credentials()
+    
     with st.form("login_form"):
-        input_username = st.text_input("Username").strip()
+        input_username = st.text_input("Username").strip().lower()
         input_password = st.text_input("Password", type="password").strip()
         submit_button = st.form_submit_button("Accedi")
         
         if submit_button:
-            # Controlla se la sezione [utenti] esiste nei Secrets e se l'username è presente
-            if "utenti" in st.secrets and input_username in st.secrets["utenti"]:
-                # Verifica la password in chiaro
-                if input_password == st.secrets["utenti"][input_username]:
-                    st.session_state["logged_in"] = True
-                    st.session_state["username"] = input_username
-                    st.rerun()
-                else:
-                    st.error("Password errata.")
+            users = credentials.get("usernames", {})
+            
+            if input_username in users:
+                stored_hash = users[input_username]["password"]
+                try:
+                    # Verifica compatibile con hash bcrypt
+                    if stored_hash.startswith("$2b$") or stored_hash.startswith("$2a$"):
+                        password_match = bcrypt.checkpw(input_password.encode('utf-8'), stored_hash.encode('utf-8'))
+                    else:
+                        password_match = (input_password == stored_hash)
+                        
+                    if password_match:
+                        st.session_state["logged_in"] = True
+                        st.session_state["username"] = input_username
+                        st.session_state["name"] = users[input_username]["name"]
+                        st.success("Accesso effettuato!")
+                        st.rerun()
+                    else:
+                        st.error("Password errata.")
+                except Exception as e:
+                    st.error(f"Errore di verifica password: {e}")
             else:
-                st.error("Utente non autorizzato.")
-    st.stop()  # Ferma il rendering del resto della pagina se non loggato
+                st.error("Utente non autorizzato o non registrato.")
+    
+    # Mostra il pannello di registrazione se non loggato
+    render_signup_panel(credentials)
+    st.stop()  # Ferma il caricamento del resto della dashboard
 
-# Variabile per filtrare i dati nel resto del codice
 username = st.session_state["username"]
-
-# Gestione Sidebar post-login
-st.sidebar.title(f"Benvenuto, *{username}*")
-if st.sidebar.button("Logout"):
-    st.session_state["logged_in"] = False
-    st.session_state["username"] = None
-    st.rerun()
-st.sidebar.markdown("---")
-
-st.title("📈 Diario di Bordo Quantitativo")
-
-# ------------------------ Connessioni Database ------------------------
-if worksheet is None or ws_tickers is None:
-    st.error("🚨 Connessione ai worksheet non riuscita. Verifica le credenziali GCP in secrets.")
-    st.stop()
+name = st.session_state.get("name", username)
 
 # ------------------------ Metriche ------------------------
 def compute_aggregates(user_ops: pd.DataFrame) -> pd.DataFrame:
@@ -482,7 +566,14 @@ def render_ticker_pies(user_ops: pd.DataFrame, user_tickers_df: pd.DataFrame):
     )
 
 # ------------------------ App ------------------------
-
+if st.session_state.get("logged_in"):
+    st.sidebar.title(f"Benvenuto, *{name}*")
+    if st.sidebar.button("Logout"):
+        st.session_state["logged_in"] = False
+        st.session_state["username"] = None
+        st.session_state["name"] = None
+        st.rerun()
+    st.sidebar.markdown("---")
 
     st.title("📈 Diario di Bordo Quantitativo")
 
@@ -824,5 +915,3 @@ def render_ticker_pies(user_ops: pd.DataFrame, user_tickers_df: pd.DataFrame):
             st.dataframe(monthly.rename(columns={"month":"Mese"}), use_container_width=True,
                          height=min(600, len(monthly)*row_height_px+60))
             st.line_chart(data=monthly.set_index("month")[["Investito Totale"]], use_container_width=True)
-
-
